@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
+	"sync"
 
 	"path/filepath"
 	"time"
@@ -29,6 +32,7 @@ type httpStreamFactory struct {
 	msgHandler
 	outputDir    string
 	outputPrefix string
+	skipHdrs     []string
 }
 
 type httpStream struct {
@@ -42,7 +46,7 @@ type reqInterceptor struct {
 	r    tcpreader.ReaderStream
 }
 
-func NewHttpStreamFactory(logger *slog.Logger, outputDir, outputPrefix string) *httpStreamFactory {
+func NewHttpStreamFactory(logger *slog.Logger, outputDir, outputPrefix string, skipHdrs []string) *httpStreamFactory {
 	return &httpStreamFactory{
 		outputDir:    outputDir,
 		outputPrefix: outputPrefix,
@@ -50,7 +54,42 @@ func NewHttpStreamFactory(logger *slog.Logger, outputDir, outputPrefix string) *
 			msg:    make(chan []byte),
 			logger: logger,
 		},
+		skipHdrs: skipHdrs,
 	}
+}
+
+func (f *httpStreamFactory) filterHeaders(data []byte) (ret []byte) {
+	if len(f.skipHdrs) == 0 {
+		return data
+	}
+	sep := []byte{0x0d, 0x0a}
+	i := bytes.Index(data, sep)
+	for {
+		if i == -1 {
+			panic("incomplete request")
+		} else if i == 0 {
+			ret = append(ret, data...)
+			break
+		}
+		line := data[:i+2]
+		if len(ret) == 0 {
+			// request line
+			ret = append(ret, line...)
+		} else {
+			j := bytes.IndexByte(line, ':')
+			if j == -1 {
+				f.logger.Debug("unable to determine header", "line", line)
+				return
+			}
+			header := string(bytes.ToLower(bytes.TrimSpace(line[:j])))
+			if !slices.Contains(f.skipHdrs, header) {
+				ret = append(ret, line...)
+			}
+		}
+		data = data[i+2:]
+		i = bytes.Index(data, sep)
+	}
+	return
 }
 
 func (f *httpStreamFactory) run() {
@@ -60,6 +99,7 @@ func (f *httpStreamFactory) run() {
 			break
 		}
 		path := filepath.Join(f.outputDir, fmt.Sprintf("%s-%d.black", f.outputPrefix, count))
+		msg := f.filterHeaders(msg)
 		if err := os.WriteFile(path, msg, os.ModePerm); err != nil {
 			f.logger.Error("failed to save", "path", path, "err", err)
 		} else {
@@ -123,12 +163,14 @@ func main() {
 		outputDir string
 		filter    string
 		level     string
+		skipHdrs  string
 	)
 	flag.IntVar(&srcPort, "src", -1, "Filter by TCP source port number")
 	flag.IntVar(&dstPort, "dst", -1, "Filter by TCP destination port number")
 	flag.StringVar(&filter, "f", "", "Filter string applied to pcap, overwritten by -src or -dst")
 	flag.StringVar(&outputDir, "o", "", "Output directory")
 	flag.StringVar(&level, "l", "info", "Logging level")
+	flag.StringVar(&skipHdrs, "skipHdrs", "host,origin,content-length", "Headers to be ignored in a case-insensitive way. Multiple header names separated by comma")
 	flag.Parse()
 
 	var filenames []string
@@ -155,17 +197,22 @@ func main() {
 
 	logger.Debug("applying filter", "filter", filter)
 
+	var wg sync.WaitGroup
 	for _, f := range filenames {
 		logger.Info("load", "file", f)
 		dir, baseName := filepath.Split(f)
 		if outputDir != "" {
 			dir = outputDir
 		}
-		factory := NewHttpStreamFactory(logger, dir, strings.TrimSuffix(baseName, filepath.Ext(baseName)))
+		factory := NewHttpStreamFactory(logger, dir, strings.TrimSuffix(baseName, filepath.Ext(baseName)), strings.Split(skipHdrs, ","))
 		pool := tcpassembly.NewStreamPool(factory)
 		assembler := tcpassembly.NewAssembler(pool)
 
-		go factory.run()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			factory.run()
+		}()
 
 		func() {
 			handle, err := pcap.OpenOffline(f)
@@ -208,4 +255,5 @@ func main() {
 
 		}()
 	}
+	wg.Wait()
 }
