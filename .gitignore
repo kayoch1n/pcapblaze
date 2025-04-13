@@ -2,3 +2,5 @@ pcapblaze
 *.zip
 *.pcap
 *.black
+*.exe
+.vscode/

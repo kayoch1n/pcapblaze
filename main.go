@@ -66,6 +66,7 @@ func (f *httpStreamFactory) run() {
 			count += 1
 		}
 	}
+	f.logger.Info("saved", "output", f.outputDir, "count", count)
 	close(f.msg)
 }
 
@@ -100,18 +101,18 @@ func (h *httpStream) run() {
 	interceptor := NewReqInterceptor(h.r)
 	buf := bufio.NewReader(interceptor)
 	for {
-		interceptor.reset()
 		req, err := http.ReadRequest(buf)
 		if err == io.EOF {
 			return
 		} else if err != nil {
-			h.logger.Error("failed to read stream", "err", err)
+			h.logger.Debug("failed to read stream", "err", err)
 		} else {
 			n := tcpreader.DiscardBytesToEOF(req.Body)
 			h.logger.Info("request", "net", h.net, "transport", h.transport, "method", req.Method, "uri", req.RequestURI, "body", n)
 			req.Body.Close()
+			h.msg <- interceptor.data
+			interceptor.reset()
 		}
-		h.msg <- interceptor.data
 	}
 }
 
@@ -125,9 +126,9 @@ func main() {
 	)
 	flag.IntVar(&srcPort, "src", -1, "Filter by TCP source port number")
 	flag.IntVar(&dstPort, "dst", -1, "Filter by TCP destination port number")
-	flag.StringVar(&filter, "f", "tcp and dst port 80", "Filter string applied to pcap, overwritten by -src or -dst")
+	flag.StringVar(&filter, "f", "", "Filter string applied to pcap, overwritten by -src or -dst")
 	flag.StringVar(&outputDir, "o", "", "Output directory")
-	flag.StringVar(&level, "l", "debug", "Logging level")
+	flag.StringVar(&level, "l", "info", "Logging level")
 	flag.Parse()
 
 	var filenames []string
@@ -174,9 +175,11 @@ func main() {
 			}
 			defer handle.Close()
 
-			if err := handle.SetBPFFilter(filter); err != nil {
-				logger.Error("failed to set filter", "err", err)
-				return
+			if filter != "" {
+				if err := handle.SetBPFFilter(filter); err != nil {
+					logger.Error("failed to set filter", "err", err)
+					return
+				}
 			}
 
 			source := gopacket.NewPacketSource(handle, handle.LinkType())

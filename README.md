@@ -13,6 +13,8 @@ go build -o pcapblaze
 ```bash
 # 默认提取目的端口为 80 的请求
 ./pcapblaze tmp1.pcap tmp2.pcap
+find . -name '*.pcap' | xargs ./pcapblaze
+
 # 提取源端口为 42592 的请求
 ./pcapblaze -src 42592 tmp.pcap
 ./pcapblaze -f "tcp and src port 42592" tmp.pcap
