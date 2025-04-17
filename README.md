@@ -4,6 +4,15 @@
 
 ## Build
 
+需要实现安装 libpcap
+
+```bash
+# Ubuntu
+sudo apt install libpcap-dev
+# CentOS
+sudo yum install libpcap-devel
+```
+
 ```bash
 go build -o pcapblaze
 ```
