@@ -4,7 +4,7 @@
 
 ## Build
 
-需要实现安装 libpcap
+需要安装 libpcap
 
 ```bash
 # Ubuntu
@@ -13,6 +13,7 @@ sudo apt install libpcap-dev
 sudo yum install libpcap-devel
 ```
 
+编译
 ```bash
 go build -o pcapblaze
 ```
